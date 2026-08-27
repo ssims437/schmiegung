@@ -168,10 +168,10 @@
         </label>
       </div>
       <div class="wand">
-        <div class="tafel click"><div class="kopf"><span class="kl">Original</span><span class="hinweis" id="hint-original"></span></div><canvas id="v-original" width="160" height="120"></canvas></div>
-        <div class="tafel"><div class="kopf"><span class="kl">Rekonstruktion</span><span class="hinweis" id="hint-reko"></span></div><canvas id="v-rekonstruktion" width="160" height="120"></canvas></div>
-        <div class="tafel"><div class="kopf"><span class="kl">Unterschied, verstärkt</span><span class="hinweis" id="hint-diff"></span></div><canvas id="v-diff" width="160" height="120"></canvas></div>
-        <div class="tafel"><div class="kopf"><span class="kl">Der Browser liest mit</span><span class="hinweis" id="hint-browser"></span></div><canvas id="v-browser" width="160" height="120"></canvas></div>
+        <div class="tafel click"><div class="kopf"><span class="kl">Original</span><span class="hinweis" id="hint-original"></span></div><canvas id="v-original" width="160" height="120" data-fest="1"></canvas></div>
+        <div class="tafel"><div class="kopf"><span class="kl">Rekonstruktion</span><span class="hinweis" id="hint-reko"></span></div><canvas id="v-rekonstruktion" width="160" height="120" data-fest="1"></canvas></div>
+        <div class="tafel"><div class="kopf"><span class="kl">Unterschied, verstärkt</span><span class="hinweis" id="hint-diff"></span></div><canvas id="v-diff" width="160" height="120" data-fest="1"></canvas></div>
+        <div class="tafel"><div class="kopf"><span class="kl">Der Browser liest mit</span><span class="hinweis" id="hint-browser"></span></div><canvas id="v-browser" width="160" height="120" data-fest="1"></canvas></div>
       </div>
       <div class="werte">
         <div class="wert"><div class="l">Dateigröße</div><div class="n" id="w-groesse">—</div><div class="k">unsere Bytes, Kopf mitgerechnet</div></div>
@@ -1395,7 +1395,11 @@
     const jetzt = document.documentElement.getAttribute("data-theme");
     const dunkel = jetzt ? jetzt === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
     document.documentElement.setAttribute("data-theme", dunkel ? "light" : "dark");
+    liveBauen();   /* die Tafeln sind gezeichnet — sie ziehen mit dem Thema mit */
   });
+  /* auch der Systemwechsel: sonst bleibt die Tafel in den Farben der Nacht,
+     während der Text schon hell ist */
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", liveBauen);
   document.querySelectorAll(".motiv").forEach((b) =>
     b.addEventListener("click", () => {
       aktivesMotiv = b.dataset.motiv;
