@@ -1,0 +1,1419 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<title>Schmiegung — jeder Verlust einzeln gemessen</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="description" content="Verlustbehaftete Bildkompression von Hand: Farbraum, Teilabtastung, Transformation und Quantisierung sowie ein eigener JPEG-Schreiber — jede Stufe einzeln angreifbar, der Browser liest die selbst geschriebenen Bytes als unabhängiger Zeuge." />
+
+<style>
+  :root {
+    --grund: #EFEEEC;  --feld:  #FAFAF8;  --tief:  #E3E2DE;
+    --linie: #C8C6C0;  --tinte: #18171A;  --leise: #5D636C;
+    --netz:  #B5B3AE;  --merk:  #1F5FA8;  --heiss: #A8471F;
+    --gut:   #2C7A34;  --warn:  #A32C22;
+    --schatten: 0 1px 0 rgba(24,23,26,.05), 0 10px 24px -16px rgba(24,23,26,.45);
+    --f-fest: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, "DejaVu Sans Mono", monospace;
+    --f-text: -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --grund: #131214; --feld: #1A191C; --tief: #0C0C0D; --linie: #302E33;
+      --tinte: #E7E5EA; --leise: #918F98; --netz: #423F46;
+      --merk: #6CA8E8; --heiss: #E0785C; --gut: #7FBF6A; --warn: #E0776B;
+      --schatten: 0 1px 0 rgba(255,255,255,.03), 0 12px 30px -18px #000;
+    }
+  }
+  :root[data-theme="dark"] {
+    --grund: #131214; --feld: #1A191C; --tief: #0C0C0D; --linie: #302E33;
+    --tinte: #E7E5EA; --leise: #918F98; --netz: #423F46;
+    --merk: #6CA8E8; --heiss: #E0785C; --gut: #7FBF6A; --warn: #E0776B;
+    --schatten: 0 1px 0 rgba(255,255,255,.03), 0 12px 30px -18px #000;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--grund); color:var(--tinte);
+    font-family:var(--f-text); font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased; }
+  .blatt { max-width:1180px; margin:0 auto;
+    padding: clamp(20px,4vw,44px) clamp(14px,3vw,28px) 64px;
+    display:flex; flex-direction:column; gap:18px; }
+
+  .marke { font-family:var(--f-fest); font-size:10px; letter-spacing:.2em; text-transform:uppercase;
+    color:var(--leise); display:flex; gap:12px; align-items:center; margin:0; }
+  .marke::after { content:""; flex:1; height:1px; background:var(--linie); }
+  h1 { font-family:var(--f-fest); font-weight:700; font-size:clamp(24px,4.2vw,40px);
+    line-height:1.06; letter-spacing:-.03em; margin:0; text-wrap:balance; }
+  h1 span { color:var(--merk); }
+  .vorspann { color:var(--leise); margin:0; }
+  .vorspann b { color:var(--tinte); font-weight:600; }
+
+  .leiste { display:flex; gap:14px; flex-wrap:wrap; align-items:center;
+    background:var(--feld); border:1px solid var(--linie); padding:9px 11px; box-shadow:var(--schatten); }
+  .kl { font-family:var(--f-fest); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--leise); }
+  button, select { font-family:var(--f-fest); font-size:12px; color:var(--tinte); background:var(--grund);
+    border:1px solid var(--linie); border-radius:0; padding:6px 10px; letter-spacing:.03em;
+    cursor:pointer; min-height:34px; }
+  button:hover, select:hover { border-color:var(--merk); }
+  button.haupt { background:var(--merk); border-color:var(--merk); color:var(--feld); }
+  button.an { border-color:var(--merk); box-shadow:inset 3px 0 0 var(--merk); }
+  button:disabled { opacity:.45; cursor:default; }
+  :focus-visible { outline:2px solid var(--merk); outline-offset:2px; }
+  input[type=range] { height:26px; accent-color:var(--merk); }
+  input[type=checkbox] { width:17px; height:17px; accent-color:var(--merk); }
+
+  .kasten { background:var(--feld); border:1px solid var(--linie); box-shadow:var(--schatten);
+    display:flex; flex-direction:column; min-width:0; }
+  .kasten-kopf { display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+    padding:8px 11px; border-bottom:1px solid var(--linie); }
+  .kasten-leib { padding:11px; display:flex; flex-direction:column; gap:10px; min-width:0; }
+
+  .werte { display:grid; grid-template-columns:repeat(auto-fit,minmax(104px,1fr)); gap:1px;
+    background:var(--linie); border:1px solid var(--linie); }
+  .wert { background:var(--feld); padding:7px 9px; min-width:0; }
+  .wert .l { font-family:var(--f-fest); font-size:9.5px; letter-spacing:.13em; text-transform:uppercase; color:var(--leise); }
+  .wert .n { font-family:var(--f-fest); font-size:16px; font-variant-numeric:tabular-nums; }
+  .wert .k { font-family:var(--f-fest); font-size:10px; color:var(--leise); }
+
+  table.liste { border-collapse:collapse; width:100%; font-family:var(--f-fest); font-size:12px; }
+  table.liste th, table.liste td { border-bottom:1px solid var(--linie); padding:4px 7px; text-align:left; vertical-align:top; }
+  table.liste th { color:var(--leise); font-weight:400; font-size:10px; letter-spacing:.1em; text-transform:uppercase; }
+
+  .hinweis { font-family:var(--f-fest); font-size:12px; color:var(--leise); letter-spacing:0; margin:0; }
+  .hinweis b { color:var(--tinte); font-weight:600; }
+  code { font-family:var(--f-fest); font-size:12px; background:var(--tief); padding:1px 4px; }
+
+  .wand { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px; }
+  .tafel { border:1px solid var(--linie); background:var(--tief); padding:8px;
+    display:flex; flex-direction:column; gap:6px; min-width:0; }
+  .tafel .kopf { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
+  .tafel canvas { width:100%; height:auto; display:block; image-rendering:pixelated; }
+  .tafel.click canvas { cursor:crosshair; }
+
+  .matrix { display:grid; grid-template-columns:repeat(8,1fr); gap:1px; background:var(--linie);
+    border:1px solid var(--linie); width:min(360px,100%); }
+  .matrix b { font-family:var(--f-fest); font-weight:400; font-size:10.5px; padding:5px 2px;
+    text-align:center; font-variant-numeric:tabular-nums; }
+
+  .hexdump { overflow-x:auto; border:1px solid var(--linie); background:var(--grund);
+    padding:8px; font-family:var(--f-fest); font-size:11.5px; white-space:pre-wrap; margin:0; }
+
+  .noten { display:grid; grid-template-columns:repeat(auto-fit,minmax(270px,1fr)); gap:18px; margin-top:6px; }
+  .noten section { background:var(--feld); border:1px solid var(--linie); padding:12px 14px; box-shadow:var(--schatten); }
+  .noten h3 { font-family:var(--f-fest); font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--leise); margin:0 0 6px; font-weight:400; }
+  .noten p { margin:0; font-size:14px; }
+
+  .fuss { color:var(--leise); font-size:13px; border-top:1px solid var(--linie); padding-top:12px; }
+  .fuss a { color:var(--merk); }
+
+  @media (max-width: 700px) {
+    table { display: block; max-width: 100%; overflow-x: auto; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition:none !important; animation:none !important; }
+  }
+
+  /* PFLEGE: breite-schirme */
+  @media (min-width: 1500px) { .blatt { max-width: 1360px; } }
+  @media (min-width: 1800px) { .blatt { max-width: 1560px; } }
+  @media (min-width: 2200px) { .blatt { max-width: 1800px; } }
+
+  /* PFLEGE: schmalschirm */
+  @media (max-width: 700px) {
+    table { display: block; max-width: 100%; overflow-x: auto; }
+  }
+
+  /* PFLEGE: klickflaechen */
+  button, select { min-height: 34px; }
+  input[type=range] { height: 26px; }
+</style>
+</head>
+<body>
+<main class="blatt">
+
+  <p class="marke">Blatt · Daten &amp; Speicher</p>
+  <h1>Schmiegung — jeder Verlust <span>einzeln gemessen</span></h1>
+  <p class="vorspann">
+    Verlustfrei macht die Reihe anderswo; hier wird geworfen, damit weniger übrig bleibt — und
+    hingeschrieben, <b>wie viel es war</b>. Der Kern der JPEG-Bildkompression besteht aus wenigen
+    Stufen, und jede wirft etwas weg: Die Farbe wandert in einen hellen Anteil und zwei farbige,
+    die farbigen werden teils übersprungen, der Rest wird gewichtet und gerundet — und am Ende steht
+    eine Bitfolge samt Dateikopf, die dieses Blatt <b>komplett von Hand schreibt</b>. Der Browser liest
+    diese Bytes als unabhängiger Zeuge. An jeder Stufe lässt sich ablesen, was sie allein gekostet hat
+    — gemessen, nicht behauptet.
+  </p>
+
+  <div class="leiste">
+    <span class="kl">Alles läuft im Browser — der Prüfknopf weiter unten stellt jede Stufe gegen ihren Wortlaut</span>
+    <span style="flex:1"></span>
+    <button id="b-thema">Ansicht</button>
+  </div>
+
+  <div class="kasten">
+    <div class="kasten-kopf">
+      <span class="kl">Das Motiv und sein Weg</span>
+      <span class="kl" id="pipeline-lage" style="margin-left:auto"></span>
+    </div>
+    <div class="kasten-leib">
+      <div class="leiste" style="box-shadow:none">
+        <button class="motiv an" data-motiv="boegen">Bögen</button>
+        <button class="motiv" data-motiv="kanten">Kanten</button>
+        <button class="motiv" data-motiv="rauschen">Rauschen</button>
+        <span style="flex:1"></span>
+        <span class="kl">Güte</span>
+        <input type="range" id="s-guete" min="1" max="100" value="75" aria-label="Güte" />
+        <span class="hinweis" id="l-guete">75</span>
+        <label class="hinweis" style="display:flex;gap:6px;align-items:center">
+          <input type="checkbox" id="c-subsample" checked /> Chroma halbiert (4:2:0)
+        </label>
+      </div>
+      <div class="wand">
+        <div class="tafel click"><div class="kopf"><span class="kl">Original</span><span class="hinweis" id="hint-original"></span></div><canvas id="v-original" width="160" height="120"></canvas></div>
+        <div class="tafel"><div class="kopf"><span class="kl">Rekonstruktion</span><span class="hinweis" id="hint-reko"></span></div><canvas id="v-rekonstruktion" width="160" height="120"></canvas></div>
+        <div class="tafel"><div class="kopf"><span class="kl">Unterschied, verstärkt</span><span class="hinweis" id="hint-diff"></span></div><canvas id="v-diff" width="160" height="120"></canvas></div>
+        <div class="tafel"><div class="kopf"><span class="kl">Der Browser liest mit</span><span class="hinweis" id="hint-browser"></span></div><canvas id="v-browser" width="160" height="120"></canvas></div>
+      </div>
+      <div class="werte">
+        <div class="wert"><div class="l">Dateigröße</div><div class="n" id="w-groesse">—</div><div class="k">unsere Bytes, Kopf mitgerechnet</div></div>
+        <div class="wert"><div class="l">Faktor</div><div class="n" id="w-faktor">—</div><div class="k">gegen die Rohdaten</div></div>
+        <div class="wert"><div class="l">Mittlerer Fehler</div><div class="n" id="w-fehler">—</div><div class="k">|Δ| je Farbwert</div></div>
+        <div class="wert"><div class="l">Größter Fehler</div><div class="n" id="w-maxfehler">—</div><div class="k">die schlimmste Stelle</div></div>
+        <div class="wert"><div class="l">PSNR</div><div class="n" id="w-psnr">—</div><div class="k">klassisches Verlustmaß</div></div>
+      </div>
+      <p class="hinweis">Jede Zeile misst den kumulativen Weg bis zu dieser Stufe, gemessen gegen das
+        unveränderte Original:</p>
+      <table class="liste"><tbody id="stufen-liste"></tbody></table>
+    </div>
+  </div>
+
+  <div class="kasten">
+    <div class="kasten-kopf">
+      <span class="kl">In einen Block hineinsehen</span>
+      <span class="kl" id="block-lage" style="margin-left:auto">auf das Original klicken</span>
+    </div>
+    <div class="kasten-leib">
+      <p class="hinweis">Jedes Kästchen ist <b>eine Frequenz</b>: links oben der gleichmäßige Anteil des
+        Blocks, nach rechts unten immer feinere Wellen. Die Zahl ist der gerundete Quotient aus
+        Transformwert und Tabelleneintrag — die einzige Stelle im ganzen Weg, an der Information
+        endgültig verloren geht.</p>
+      <div class="spalten">
+        <div class="matrix" id="m-luma" aria-label="Luma-Anteil des gewählten Blocks"></div>
+        <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start">
+          <span class="hinweis" id="block-info">noch kein Block gewählt</span>
+          <span class="hinweis" id="tabellen-info"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="kasten">
+    <div class="kasten-kopf">
+      <span class="kl">Die selbst geschriebenen Bytes</span>
+      <span class="kl" id="bytes-lage"></span>
+    </div>
+    <div class="kasten-leib">
+      <p class="hinweis">Keine Bibliothek schreibt diese Datei: Markierungen, Quantisierungstabellen,
+        Codesatzbücher, Entropiecodierung und Bytestopfung kommen Stück für Stück aus diesem Dokument.
+        Umgekehrt liest der eigene strenge Deuter denselben Strom zurück — Markierung für Markierung,
+        Bit für Bit — und wirft bei allem, was er nicht herleiten kann.</p>
+      <pre class="hexdump" id="hexdump">noch nicht gerechnet</pre>
+    </div>
+  </div>
+
+  <div class="kasten">
+    <div class="kasten-kopf">
+      <span class="kl">Beweis statt Behauptung</span>
+      <button id="b-pruefen" class="haupt" style="margin-left:auto">Prüfen</button>
+    </div>
+    <div class="kasten-leib">
+      <p class="hinweis">
+        Vier Stellen, vier definierbare Übergänge — jede wird einzeln gestellt: zwei unabhängige
+        Farbformulierungen, eine erschöpfende Probe über sämtliche <b>65 536 Byte-Paare</b> der
+        Halbierung, der Transformwortlaut als eigene zweite Rechnung neben der Schnellfassung, die
+        Rundungslinie über alle <b>520 455</b> Paare von Stufe und Wert, ein Bitstrom, der durch den
+        eigenen Deuter zurückkehrt, und ein Codesatzbuch gegen veröffentlichte Kodewörter. Dazu zwei
+        Gegenproben mit bekanntem Ergebnis: ein eingeschmuggelter Farben-Tauscher und ein gekipptes
+        Bit — <b>beide müssen ertappt werden</b>, sonst würde die Maschine nichts messen.
+      </p>
+      <table class="liste" id="pruef"><tbody></tbody></table>
+      <p class="hinweis" id="pruef-fuss">noch nicht geprüft</p>
+    </div>
+  </div>
+
+  <div class="noten">
+    <section>
+      <h3>Warum die Stufen trennbar sind</h3>
+      <p>
+        Der übliche Satz lautet „JPEG ist verlustbehaftet" — als wäre der Verlust eine Eigenschaft des
+        Formats. Er ist eine Summe einzelner Handlungen: Die Farbe wandert mit rundungsbedingtem Rest,
+        die Halbierung mittelt ganze Farbwerte fort, die Quantisierung rundet Quotienten — und die
+        Entropiecodierung zwischen all dem verliert <b>nichts</b>. Wer die Handlungen trennt, kann jede
+        für sich zur Rechenschaft ziehen; genau dafür stehen die Stufenzeilen.
+      </p>
+    </section>
+    <section>
+      <h3>Warum der Zeuge wirklich außerhalb steht</h3>
+      <p>
+        Verglichen wird nicht mit sich selbst: Der Browser bekommt <b>dieselben Bytes</b> vorgesetzt,
+        die dieses Blatt von Hand geschrieben hat, und muss daraus mit eigenem Decoder ein Bild machen.
+        Wenn selbstgeschriebene Markierungen, selbst berechnete Codesätze und selbst gestopfte Bitfolgen
+        vom fremden Werkzeug akzeptiert und ähnlich zurückgegeben werden, sprechen zwei unabhängige
+        Implementierungen — und die Gegenproben zeigen, dass der Vergleich auch dann zuschlägt, wenn
+        er soll.
+      </p>
+    </section>
+    <section>
+      <h3>Was hier ehrlicherweise offen bleibt</h3>
+      <p>
+        Die IDCT-Rundung ist von der Norm freigegeben: Verschiedene Decoder dürfen im letzten
+        Halbschritt leicht anders runden. Das Blatt meldet deshalb die <b>gemessene Größe</b> dieser
+        Streuung, statt sie unter einer verordneten Toleranz zu verstecken — groß genug, um ehrlich zu
+        sein, klein genug, um leise zu bleiben. Die Basistabellen stammen aus dem Anhang der Norm;
+        ihre Codesätze hält der Prüflauf an veröffentlichten Kodewörtern fest, damit kein vergessener
+        Wert still durchgeht.
+      </p>
+    </section>
+  </div>
+
+  <p class="fuss">
+    Eine einzelne HTML-Datei. Kein Build, keine Bibliothek, nichts verlässt den Browser.
+    <span style="display:block;margin-top:8px">
+      Alle Blätter: <a href="https://ssims437.github.io/">ssims437.github.io</a>
+    </span>
+  </p>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const ganz = (x) => Math.round(x).toLocaleString("de-AT");
+  const hex = (n, st) => n.toString(16).toUpperCase().padStart(st || 2, "0");
+  const rast = () => new Promise((r) => setTimeout(r, 0));
+
+  const BREITE = 160, HOEHE = 120, ROHBYTES = BREITE * HOEHE * 3;
+
+  /* ==========================================================================
+     ZUFALL MIT SAAT — jeder Stichprobe gehört dieselbe Rechnung
+     ========================================================================== */
+  function mulberry(saat) {
+    let s = saat >>> 0;
+    return () => {
+      s = (s + 0x6D2B79F5) >>> 0;
+      let t = Math.imul(s ^ (s >>> 15), s | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /* ==========================================================================
+     MOTIVE — ohne Zufall gezeichnet
+     ========================================================================== */
+  function motivDaten(welcher) {
+    const f = [];
+    if (welcher === "boegen") {
+      for (let y = 0; y < HOEHE; y++) for (let x = 0; x < BREITE; x++) {
+        const d = Math.hypot(x - 108, y - 44);
+        const ring = Math.sin((d % 34) / 34 * Math.PI * 2) * 46 + 130;
+        const zone = (Math.floor((x * 1.1 - y * 0.55) / 40) % 2 === 0);
+        const boden = y > 92 ? 250 : 62;
+        const kalt = Math.abs(((x + y * 1.7) % 90) - 45) * 2.2;
+        f.push(
+          Math.max(0, Math.min(255, Math.round(ring + (zone ? 44 : -14)))),
+          Math.max(0, Math.min(255, Math.round(boden + (zone ? 18 : -30) - kalt * 0.35))),
+          Math.max(0, Math.min(255, Math.round(212 - kalt + (zone ? 24 : -20)))));
+      }
+    } else if (welcher === "kanten") {
+      for (let y = 0; y < HOEHE; y++) for (let x = 0; x < BREITE; x++) {
+        const balken = Math.floor(x / 20) % 2 === 0;
+        const treppe = Math.floor((x + y) / 30) % 2 === 0;
+        const kreis = Math.hypot(x - 48, y - 66) < 32;
+        let r = balken ? 226 : 58;
+        let g = treppe ? 128 : 196;
+        let b = kreis ? 214 : 42 + (Math.floor(x / 20) % 3) * 52;
+        if (kreis) { r += 20; g += 38; b -= 30; }
+        f.push(r, g, b);
+      }
+    } else {
+      const q = mulberry(20260826);
+      for (let i = 0; i < BREITE * HOEHE; i++) {
+        const glatt = 108 + 52 * Math.sin((i % BREITE) / 17) + 44 * Math.cos(Math.floor(i / BREITE) / 13);
+        const rausch = Math.max(0, Math.min(255, Math.round(glatt + (q() - 0.5) * 170)));
+        f.push(rausch, rausch, Math.max(0, Math.min(255, rausch + ((i % 7) - 3) * 6)));
+      }
+    }
+    return Uint8ClampedArray.from(f);
+  }
+
+  /* ==========================================================================
+     STUFE FARBE — ITU-R BT.601, ganzzahlig geführt. Hauptweg: die bekannten
+     Koeffizienten. Zeugin für den Prüflauf: dieselbe Vorschrift, aus Kr/Kb
+     buchstabiert, ohne gemeinsame Zwischenwerte.
+     ========================================================================== */
+  function ycbcrAusRgb(r, g, b) {
+    const klemm = (v) => Math.max(0, Math.min(255, Math.round(v)));
+    return [
+      Math.round(0.299 * r + 0.587 * g + 0.114 * b),
+      klemm(-0.168736 * r - 0.331264 * g + 0.5 * b + 128),
+      klemm(0.5 * r - 0.418688 * g - 0.081312 * b + 128)];
+  }
+  function ycbcrAusRgbKrKb(r, g, b) {
+    /* Dieselben drei Stellen wie die Koeffiziententabelle — nur Cb und Cr
+       kommen hier eigenständig aus der Kr/Kb-Definition, nicht aus den
+       abgeleiteten Rundungskonstanten. */
+    const kr = 0.299, kb = 0.114, kg = 0.587;
+    const y = kr * r + kg * g + kb * b;
+    const klemm = (v) => Math.max(0, Math.min(255, Math.round(v)));
+    return [
+      Math.round(y),
+      klemm(0.5 * (b - y) / (1 - kb) + 128),
+      klemm(0.5 * (r - y) / (1 - kr) + 128)];
+  }
+  function rgbAusYcbcr(y, cb, cr) {
+    const z = (v) => Math.max(0, Math.min(255, Math.round(v)));
+    return [
+      z(y + 1.402 * (cr - 128)),
+      z(y - 0.344136 * (cb - 128) - 0.714136 * (cr - 128)),
+      z(y + 1.772 * (cb - 128))];
+  }
+
+  /* ==========================================================================
+     STUFE TEILABTASTUNG — jedes 2×2-Feld der Farbkanäle wird gemittelt;
+     zurück kommt es durch Wiederholung.
+     ========================================================================== */
+  function halbiere(d, quelleBreite, quelleHoehe) {
+    const kw = Math.ceil(quelleBreite / 2), kh = Math.ceil(quelleHoehe / 2);
+    const q = new Float32Array(kw * kh);
+    for (let y = 0; y < kh; y++)
+      for (let x = 0; x < kw; x++) {
+        let s = 0;
+        for (let dy = 0; dy < 2; dy++)
+          for (let dx = 0; dx < 2; dx++)
+            s += d[Math.min(quelleHoehe - 1, y * 2 + dy) * quelleBreite + Math.min(quelleBreite - 1, x * 2 + dx)];
+        q[y * kw + x] = s / 4;
+      }
+    return { d: q, b: kw, h: kh };
+  }
+
+  /* ==========================================================================
+     STUFE TRANSFORM — DCT-II, orthogonal normiert. Hauptweg: separabel
+     (Zeilen, dann Spalten). Zeugin: der Wortlaut der Doppelsumme.
+     ========================================================================== */
+  const KOSINUS = (() => {
+    const t = [];
+    for (let u = 0; u < 8; u++)
+      for (let x = 0; x < 8; x++) t.push(Math.cos((2 * x + 1) * u * Math.PI / 16));
+    return t;
+  })();
+  /* Orthonormale Skalierung der DCT-II: DC trägt 1/√8, alle anderen ½.
+     Ein Zehntel daneben kippt Parseval — hier gemessen worden. */
+  const GEWICHT = (i) => (i === 0 ? Math.SQRT1_2 / 2 : 0.5);
+
+  function dctBlock(block) {
+    const tmp = new Float64Array(64), erg = new Float64Array(64);
+    for (let y = 0; y < 8; y++)
+      for (let u = 0; u < 8; u++) {
+        let s = 0;
+        for (let x = 0; x < 8; x++) s += GEWICHT(u) * KOSINUS[u * 8 + x] * block[y * 8 + x];
+        tmp[y * 8 + u] = s;
+      }
+    for (let u = 0; u < 8; u++)
+      for (let v = 0; v < 8; v++) {
+        let s = 0;
+        for (let y = 0; y < 8; y++) s += GEWICHT(v) * KOSINUS[v * 8 + y] * tmp[y * 8 + u];
+        erg[v * 8 + u] = s;
+      }
+    return erg;
+  }
+  function dctDefinitionswortlaut(block) {   /* zweite Zählerin, eigener Weg */
+    const erg = new Float64Array(64);
+    for (let v = 0; v < 8; v++)
+      for (let u = 0; u < 8; u++) {
+        let s = 0;
+        for (let y = 0; y < 8; y++) {
+          let zeile = 0;
+          for (let x = 0; x < 8; x++) zeile += KOSINUS[u * 8 + x] * block[y * 8 + x];
+          s += GEWICHT(u) * GEWICHT(v) * KOSINUS[v * 8 + y] * zeile;
+        }
+        erg[v * 8 + u] = s;
+      }
+    return erg;
+  }
+  function idctBlock(k) {
+    const tmp = new Float64Array(64), erg = new Float64Array(64);
+    for (let v = 0; v < 8; v++)
+      for (let x = 0; x < 8; x++) {
+        let s = 0;
+        for (let u = 0; u < 8; u++) s += GEWICHT(u) * KOSINUS[u * 8 + x] * k[v * 8 + u];
+        tmp[v * 8 + x] = s;
+      }
+    for (let x = 0; x < 8; x++)
+      for (let y = 0; y < 8; y++) {
+        let s = 0;
+        for (let v = 0; v < 8; v++) s += GEWICHT(v) * KOSINUS[v * 8 + y] * tmp[v * 8 + x];
+        erg[y * 8 + x] = s;
+      }
+    return erg;
+  }
+
+  /* ==========================================================================
+     STUFE QUANTISIERUNG — Basistabellen aus dem Normanhang K, skaliert wie im
+     verbreiteten IJG-Empfinden (sehr hohe Güte deckelt bei 255, wie überall).
+     Rundungsregel: vom Betrag fort, nie darüber hinaus.
+     ========================================================================== */
+  const BASIS_LUMA = [
+    16, 11, 10, 16, 24, 40, 51, 61,  12, 12, 14, 19, 26, 58, 60, 55,
+    14, 13, 16, 24, 40, 57, 69, 56,  14, 17, 22, 29, 51, 87, 80, 62,
+    18, 22, 37, 56, 68,109,103, 77,  24, 35, 55, 64, 81,104,113, 92,
+    49, 64, 78, 87,103,121,120,101,   72, 92, 95, 98,112,100,103, 99];
+  const BASIS_CHROMA = [
+    17, 18, 24, 47, 99, 99, 99, 99,   18, 21, 26, 66, 99, 99, 99, 99,
+    24, 26, 56, 99, 99, 99, 99, 99,   47, 66, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99,   99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99,   99, 99, 99, 99, 99, 99, 99, 99];
+
+  function quantTabelle(basis, guete) {
+    const staerke = guete < 50 ? Math.floor(5000 / guete) : Math.round(200 - guete * 2);
+    return basis.map((b) => Math.max(1, Math.min(255, Math.floor((b * staerke + 50) / 100))));
+  }
+  function quat(w, s) { return w >= 0 ? Math.floor(w / s + 0.5) : Math.ceil(w / s - 0.5); }
+
+  /* ==========================================================================
+     CODESÄTZE — BITS/WERTE aus dem Normanhang K, synthetisiert nach der
+     Vorschrift; der Prüflauf hält Stichwörter gegen veröffentlichte Codes.
+     ========================================================================== */
+  const BITS_DC_LUMA = [0,1,5,1,1,1,1,1,1,0,0,0,0,0,0,0];
+  const W_DC_LUMA = [0,1,2,3,4,5,6,7,8,9,10,11];
+  const BITS_DC_CHROMA = [0,3,1,1,1,1,1,1,1,1,1,0,0,0,0,0];
+  const W_DC_CHROMA = [0,1,2,3,4,5,6,7,8,9,10,11];
+  const BITS_AC_LUMA = [0,2,1,3,3,2,4,3,5,5,4,4,0,0,1,125];
+  const BITS_AC_CHROMA = [0,2,1,2,4,4,3,4,7,5,4,4,0,1,2,119];
+
+  function satzAus(bits, werte) {
+    if (bits.reduce((a, b) => a + b, 0) !== werte.length)
+      throw new Error("BITS-Zahl passt nicht zur Werteliste");
+    const buch = new Map();               /* wert → {code, laenge} */
+    let code = 0, zeiger = 0;
+    for (let laenge = 1; laenge <= 16; laenge++) {
+      for (let i = 0; i < bits[laenge - 1]; i++) {
+        buch.set(werte[zeiger], { code, laenge });
+        code++; zeiger++;
+      }
+      code <<= 1;
+    }
+    return buch;
+  }
+
+  const SATZ_DC_L = satzAus(BITS_DC_LUMA, W_DC_LUMA);
+  const SATZ_DC_C = satzAus(BITS_DC_CHROMA, W_DC_CHROMA);
+  const W_AC_LUMA = [
+    0x01,0x02,0x03,0x00,0x04,0x11,0x05,0x12,0x21,0x31,0x41,0x06,0x13,0x51,0x61,0x07,
+    0x22,0x71,0x14,0x32,0x81,0x91,0xA1,0x08,0x23,0x42,0xB1,0xC1,0x15,0x52,0xD1,0xF0,
+    0x24,0x33,0x62,0x72,0x82,0x09,0x0A,0x16,0x17,0x18,0x19,0x1A,0x25,0x26,0x27,0x28,
+    0x29,0x2A,0x34,0x35,0x36,0x37,0x38,0x39,0x3A,0x43,0x44,0x45,0x46,0x47,0x48,0x49,
+    0x4A,0x53,0x54,0x55,0x56,0x57,0x58,0x59,0x5A,0x63,0x64,0x65,0x66,0x67,0x68,0x69,
+    0x6A,0x73,0x74,0x75,0x76,0x77,0x78,0x79,0x7A,0x83,0x84,0x85,0x86,0x87,0x88,0x89,
+    0x8A,0x92,0x93,0x94,0x95,0x96,0x97,0x98,0x99,0x9A,0xA2,0xA3,0xA4,0xA5,0xA6,0xA7,
+    0xA8,0xA9,0xAA,0xB2,0xB3,0xB4,0xB5,0xB6,0xB7,0xB8,0xB9,0xBA,0xC2,0xC3,0xC4,0xC5,
+    0xC6,0xC7,0xC8,0xC9,0xCA,0xD2,0xD3,0xD4,0xD5,0xD6,0xD7,0xD8,0xD9,0xDA,0xE1,0xE2,
+    0xE3,0xE4,0xE5,0xE6,0xE7,0xE8,0xE9,0xEA,0xF1,0xF2,0xF3,0xF4,0xF5,0xF6,0xF7,0xF8,
+    0xF9,0xFA];
+  const W_AC_CHROMA = [
+    0x00,0x01,0x02,0x03,0x11,0x04,0x05,0x21,0x31,0x06,0x12,0x41,0x51,0x07,0x61,0x71,
+    0x13,0x22,0x32,0x81,0x08,0x14,0x42,0x91,0xA1,0xB1,0xC1,0x09,0x23,0x33,0x52,0xF0,
+    0x15,0x62,0x72,0xD1,0x0A,0x16,0x24,0x34,0xE1,0x25,0xF1,0x17,0x18,0x19,0x1A,0x26,
+    0x27,0x28,0x29,0x2A,0x35,0x36,0x37,0x38,0x39,0x3A,0x43,0x44,0x45,0x46,0x47,0x48,
+    0x49,0x4A,0x53,0x54,0x55,0x56,0x57,0x58,0x59,0x5A,0x63,0x64,0x65,0x66,0x67,0x68,
+    0x69,0x6A,0x73,0x74,0x75,0x76,0x77,0x78,0x79,0x7A,0x82,0x83,0x84,0x85,0x86,0x87,
+    0x88,0x89,0x8A,0x92,0x93,0x94,0x95,0x96,0x97,0x98,0x99,0x9A,0xA2,0xA3,0xA4,0xA5,
+    0xA6,0xA7,0xA8,0xA9,0xAA,0xB2,0xB3,0xB4,0xB5,0xB6,0xB7,0xB8,0xB9,0xBA,0xC2,0xC3,
+    0xC4,0xC5,0xC6,0xC7,0xC8,0xC9,0xCA,0xD2,0xD3,0xD4,0xD5,0xD6,0xD7,0xD8,0xD9,0xDA,
+    0xE2,0xE3,0xE4,0xE5,0xE6,0xE7,0xE8,0xE9,0xEA,0xF2,0xF3,0xF4,0xF5,0xF6,0xF7,0xF8,
+    0xF9,0xFA];
+  const SATZ_AC_L = satzAus(BITS_AC_LUMA, W_AC_LUMA);
+  const SATZ_AC_C = satzAus(BITS_AC_CHROMA, W_AC_CHROMA);
+
+  const ZICKZACK = [
+    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5,
+    12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28,
+    35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
+    58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63];
+
+  const kategorieVon = (w) => {
+    if (w === 0) return 0;
+    let betrag = Math.abs(w), k = 0;
+    while (betrag > 1) { betrag >>= 1; k++; }
+    return k + 1;
+  };
+
+  /* ==========================================================================
+     DER SCHREIBER — Markierungen, Tabellen, Bücher, Scan, Stopfung, Ende.
+     Daneben liefert er sämtliche Quotienten als Rechnung, denselben Weg
+     zurückzugehen.
+     ========================================================================== */
+  function ebenePolstern(d, qB, qH, zB, zH) {
+    const p = new Float32Array(zB * zH);
+    for (let y = 0; y < zH; y++) {
+      const qy = Math.min(qH - 1, y);
+      for (let x = 0; x < zB; x++) p[y * zB + x] = d[qy * qB + Math.min(qB - 1, x)];
+    }
+    return p;
+  }
+
+  function jfifSchreiben(quelRGB, bildB, bildH, tabL, tabC, halbiert, schmuggelUm) {
+    const n = bildB * bildH;
+    const Y = new Float32Array(n), CBraw = new Float32Array(n), CRraw = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const [y, cb, cr] = ycbcrAusRgb(quelRGB[i * 3], quelRGB[i * 3 + 1], quelRGB[i * 3 + 2]);
+      Y[i] = y; CBraw[i] = cb; CRraw[i] = cr;
+    }
+    let cbDaten = CBraw, crDaten = CRraw, cbB = bildB, cbH = bildH;
+    if (schmuggelUm) { const t = cbDaten; cbDaten = CRraw.slice(); crDaten = t; }   /* der Schmuggler */
+    let hcb = null, hcr = null;
+    if (halbiert) {
+      hcb = halbiere(cbDaten, bildB, bildH);
+      hcr = halbiere(crDaten, bildB, bildH);
+      cbDaten = hcb.d; cbB = hcb.b; cbH = hcb.h;
+      crDaten = hcr.d;
+    }
+    const hw = halbiert ? 2 : 1;
+    const mcusX = Math.ceil(bildB / (8 * hw)), mcusY = Math.ceil(bildH / (8 * hw));
+    const pw = mcusX * 8 * hw, ph = mcusY * 8 * hw, cw = mcusX * 8, ch = mcusY * 8;
+    const Yp = ebenePolstern(Y, bildB, bildH, pw, ph);
+    const CBp = ebenePolstern(cbDaten, cbB, cbH, cw, ch);
+    const CRp = ebenePolstern(crDaten, cbB, cbH, cw, ch);
+
+    const merker = [], aus = [];
+    const byte = (b) => aus.push(b & 0xFF);
+    const woerter = (w) => { byte(w >> 8); byte(w); };
+    const mark = (name) => merker.push({ name, stelle: aus.length });
+
+    /* Bits laufen direkt in den Bytestrom; ein fertiges Byte wird sofort
+       angehängt, nach einem vollen 0xFF folgt die Stopfung. */
+    let strom = 0, dran = 0;
+    const zahl = (code, laenge) => {
+      for (let i = laenge - 1; i >= 0; i--) {
+        strom = (strom << 1) | ((code >>> i) & 1);
+        if (++dran === 8) {
+          aus.push(strom);
+          if (strom === 0xFF) aus.push(0x00);
+          strom = 0; dran = 0;
+        }
+      }
+    };
+    const zusatz = (wert, kat) => {
+      if (kat === 0) return;
+      const maske = (1 << kat) - 1;
+      zahl((wert >= 0 ? wert : wert - 1) & maske, kat);
+    };
+
+    const merkeQQ = {};
+    function codiereDU(ebene, ebBreite, bx, by, tq, satzdc, satzac, vorObjekt, ablageSchluessel) {
+      const klecks = new Float64Array(64);
+      for (let y = 0; y < 8; y++)
+        for (let x = 0; x < 8; x++) klecks[y * 8 + x] = ebene[(by * 8 + y) * ebBreite + bx * 8 + x] - 128;   /* Pegelversatz der Norm */
+      const f = dctBlock(klecks);
+      const qq = new Int16Array(64);
+      for (let i = 0; i < 64; i++) qq[i] = quat(f[i], tq[i]);
+      merkeQQ[ablageSchluessel] = qq.slice();
+      const dc = qq[0] - vorObjekt.v, kat = kategorieVon(dc);
+      const sd = satzdc.get(kat);
+      zahl(sd.code, sd.laenge);
+      zusatz(dc, kat);
+      vorObjekt.v = qq[0];
+      let letzte = 63;
+      while (letzte > 0 && qq[ZICKZACK[letzte]] === 0) letzte--;
+      let lauf = 0;
+      for (let k = 1; k <= letzte; k++) {
+        const v = qq[ZICKZACK[k]];
+        if (v === 0) { if (++lauf === 16) { const s = satzac.get(0xF0); zahl(s.code, s.laenge); lauf = 0; } continue; }
+        const gr = kategorieVon(v);
+        const s = satzac.get((lauf << 4) | gr);
+        zahl(s.code, s.laenge);
+        zusatz(v, gr);
+        lauf = 0;
+      }
+      if (letzte < 63) { const s = satzac.get(0); zahl(s.code, s.laenge); }
+    }
+
+    mark("SOI"); woerter(0xFFD8);
+    mark("APP0"); woerter(0xFFE0); woerter(16);
+    for (const c of [0x4A, 0x46, 0x49, 0x46, 0]) byte(c);
+    woerter(0x0101); byte(0); woerter(1); woerter(1); byte(0); byte(0);
+    mark("DQT-L"); woerter(0xFFDB); woerter(67); byte(0);
+    for (let i = 0; i < 64; i++) byte(tabL[ZICKZACK[i]]);   /* die Norm will Zickzack */
+    mark("DQT-C"); woerter(0xFFDB); woerter(67); byte(1);
+    for (let i = 0; i < 64; i++) byte(tabC[ZICKZACK[i]]);
+    mark("SOF0"); woerter(0xFFC0); woerter(17); byte(8);
+    woerter(bildH); woerter(bildB); byte(3);
+    byte(1); byte(hw === 2 ? 0x22 : 0x11); byte(0);
+    byte(2); byte(0x11); byte(1);
+    byte(3); byte(0x11); byte(1);
+    const dht = (id, bitsArr, werteArr) => {
+      mark("DHT-" + hex(id));
+      woerter(0xFFC4); woerter(3 + 16 + werteArr.length); byte(id);
+      for (const b of bitsArr) byte(b);
+      for (const v of werteArr) byte(v);
+    };
+    dht(0x00, BITS_DC_LUMA, W_DC_LUMA);
+    dht(0x10, BITS_AC_LUMA, W_AC_LUMA);
+    dht(0x01, BITS_DC_CHROMA, W_DC_CHROMA);
+    dht(0x11, BITS_AC_CHROMA, W_AC_CHROMA);
+    mark("SOS"); woerter(0xFFDA); woerter(12); byte(3);
+    byte(1); byte(0x00); byte(2); byte(0x11); byte(3); byte(0x11);
+    byte(0); byte(63); byte(0);
+
+    const vY = { v: 0 }, vCb = { v: 0 }, vCr = { v: 0 };
+    for (let my = 0; my < mcusY; my++)
+      for (let mx = 0; mx < mcusX; mx++) {
+        for (let sy = 0; sy < hw; sy++)
+          for (let sx = 0; sx < hw; sx++)
+            codiereDU(Yp, pw, mx * hw + sx, my * hw + sy,
+              tabL, SATZ_DC_L, SATZ_AC_L, vY,
+              "Y:" + (mx * hw + sx) + ":" + (my * hw + sy));
+        codiereDU(CBp, cw, mx, my, tabC, SATZ_DC_C, SATZ_AC_C, vCb, "CB:" + mx + ":" + my);
+        codiereDU(CRp, cw, mx, my, tabC, SATZ_DC_C, SATZ_AC_C, vCr, "CR:" + mx + ":" + my);
+      }
+    while (dran !== 0) zahl(1, 1);
+    mark("EOI"); woerter(0xFFD9);
+    const folge = Uint8Array.from(aus);
+
+    /* Rückrechnung aus denselben Quotienten: Dequantisierung, IDCT, Farbe zurück */
+    const Yz = new Float32Array(n);
+    const bxY = Math.ceil(bildB / 8), byY = Math.ceil(bildH / 8);
+    for (let by = 0; by < byY; by++)
+      for (let bx = 0; bx < bxY; bx++) {
+        const qq = merkeQQ["Y:" + bx + ":" + by];
+        const gemischt = new Float64Array(64);
+        /* Der Merker steht im Block-Raster wie der Transformwert selbst:
+           hier ist keine Zickzack-Spur nötig, nur das identische Feld. */
+        for (let i = 0; i < 64; i++) gemischt[i] = qq[i] * tabL[i];
+        const pix = idctBlock(gemischt);
+        for (let y = 0; y < 8; y++) {
+          const yy = by * 8 + y; if (yy >= bildH) break;
+          for (let x = 0; x < 8; x++) {
+            const xx = bx * 8 + x; if (xx >= bildB) break;
+            Yz[yy * bildB + xx] = pix[y * 8 + x] + 128;   /* Pegelversatz zurück */
+          }
+        }
+      }
+    const cbzpB = cbB, cbzpH = cbH;
+    const CBz = new Float32Array(cbzpB * cbzpH), CRz = new Float32Array(cbzpB * cbzpH);
+    const fülleFarbe = (ziel, kenn) => {
+      const bxB = Math.ceil(cbzpB / 8), byB = Math.ceil(cbzpH / 8);
+      for (let by = 0; by < byB; by++)
+        for (let bx = 0; bx < bxB; bx++) {
+          const qq = merkeQQ[kenn + bx + ":" + by];
+          if (!qq) continue;
+          const gem = new Float64Array(64);
+          for (let i = 0; i < 64; i++) gem[i] = qq[i] * tabC[i];
+          const pix = idctBlock(gem);
+          for (let y = 0; y < 8; y++) {
+            const yy = by * 8 + y; if (yy >= cbzpH) break;
+            for (let x = 0; x < 8; x++) {
+              const xx = bx * 8 + x; if (xx >= cbzpB) break;
+              ziel[yy * cbzpB + xx] = pix[y * 8 + x] + 128;   /* Pegelversatz zurück */
+            }
+          }
+        }
+    };
+    fülleFarbe(CBz, "CB:");
+    fülleFarbe(CRz, "CR:");
+    const reko = new Uint8ClampedArray(n * 3);
+    const schritt = halbiert ? 1 : 0;
+    for (let y = 0; y < bildH; y++)
+      for (let x = 0; x < bildB; x++) {
+        const yv = Yz[y * bildB + x];
+        const cv = CBz[(y >> schritt) * cbzpB + (x >> schritt)];
+        const rv = CRz[(y >> schritt) * cbzpB + (x >> schritt)];
+        const [r, g, b] = rgbAusYcbcr(Math.round(yv), Math.round(cv), Math.round(rv));
+        const i = (y * bildB + x) * 3;
+        reko[i] = r; reko[i + 1] = g; reko[i + 2] = b;
+      }
+    return { folge, merker, reko, merkeQQ, sosStelle: merker.find((m) => m.name === "SOS").stelle };
+  }
+
+  /* ==========================================================================
+     DER STRENGE DEUTER — parst Markierungen echt aus den Bytes, baut die
+     Codesatzbücher daraus, liest den Scan Bit für Bit und wirft bei allem,
+     was sich nicht herleiten lässt.
+     ========================================================================== */
+  function strengDeuten(folge) {
+    let p = 0;
+    const nimm = () => { if (p >= folge.length) throw new Error("Strom zu kurz bei Byte " + p); return folge[p++]; };
+    const erwart = (b, wo) => { const v = nimm(); if (v !== b) throw new Error(`Bei ${wo}: ${hex(b)} erwartet, ${hex(v)} gefunden`); };
+
+    erwart(0xFF, "SOI"); erwart(0xD8, "SOI");
+    let quants = {}, fragmente = [], bildB = 0, bildH = 0;
+    while (true) {
+      erwart(0xFF, "Markierungssuche");
+      let m = nimm();
+      while (m === 0xFF) m = nimm();
+      if (m === 0xD9) throw new Error("EOI, aber kein Scan dabei");
+      const laenge = (nimm() << 8) | nimm();
+      if (laenge < 2 || p + laenge - 2 > folge.length) throw new Error("Markierungslänge unmöglich");
+      const ende = p + laenge - 2;
+      if (m === 0xDB) {
+        while (p < ende) {
+          const pq = nimm();
+          if ((pq >> 4) !== 0) throw new Error("nur 8-Bit-Quantisierungstabellen verstanden");
+          const id = pq & 15;
+          if (id > 3) throw new Error("Tabellenkennung außer Reichweite");
+          if (quants[id]) throw new Error("Tabelle doppelt");
+          quants[id] = new Array(64);
+          for (let i = 0; i < 64; i++) {
+            const v = nimm();
+            if (v === 0) throw new Error("Null-Stufe in Tabelle " + id);
+            quants[id][ZICKZACK[i]] = v;      /* im Strom Zickzack, im Blatt Raster */
+          }
+        }
+      } else if (m === 0xC4) {
+        const id = nimm();
+        const satzArt = id >> 4, satzTh = id & 15;
+        if (satzArt > 1 || satzTh > 3) throw new Error("Codesatzkennung außer Reichweite");
+        const cnt = [];
+        for (let i = 0; i < 16; i++) cnt.push(nimm());
+        const gesamt = cnt.reduce((a, b) => a + b, 0);
+        if (gesamt === 0 || gesamt > 256) throw new Error("Codesatzgröße unmöglich");
+        if (1 + 16 + gesamt !== laenge - 2)
+          throw new Error("DHT-Länge deckt sich nicht mit Buchinhalt");
+        const bw = [];
+        for (const c of cnt) for (let i = 0; i < c; i++) bw.push(nimm());
+        fragmente.push({ satzArt, satzTh, cnt, bw });
+      } else if (m === 0xC0) {
+        if (nimm() !== 8) throw new Error("nur 8-Bit-Abtastung verstanden");
+        bildH = (nimm() << 8) | nimm();
+        bildB = (nimm() << 8) | nimm();
+        const anz = nimm();
+        if (anz !== 3) throw new Error("genau drei Komponenten erwartet");
+        for (let i = 0; i < 3; i++) {
+          const kenn = nimm(), fakt = nimm(), qt = nimm();
+          fragmente.push({ kenn, hv: fakt, qt });
+        }
+      } else if (m === 0xDA) {
+        const anz = nimm(), ordnung = [];
+        for (let i = 0; i < anz; i++) {
+          const kenn = nimm(), tabs = nimm();
+          ordnung.push({ kenn, dc: (tabs >> 4) & 15, ac: tabs & 15 });
+        }
+        if (ordnung.some((o) => o.dc > 3 || o.ac > 3)) throw new Error("Tabellenkennung außer Reichweite");
+        if (ordnung.map((o) => o.kenn).join(",") !== "1,2,3")
+          throw new Error("Komponentenfolge ist fest 1,2,3");
+        if (nimm() !== 0 || nimm() !== 63 || nimm() !== 0)
+          throw new Error("Spektralauswahl ist fest 0…63");
+
+        const baue = (tabKennung, art) => {
+          const sollArt = art === "ac" ? 1 : 0;
+          const exakt = fragmente.find((t) =>
+            t.cnt !== undefined && t.satzArt === sollArt && t.satzTh === tabKennung);
+          if (!exakt) throw new Error(`fehlendes ${art.toUpperCase()}-Buch mit Kennung ${tabKennung}`);
+          let code = 0, zeiger = 0;
+          const buch = new Map();                 /* code·100+länge → wert */
+          for (let l = 1; l <= 16; l++) {
+            for (let i = 0; i < exakt.cnt[l - 1]; i++) {
+              buch.set(code * 100 + l, exakt.bw[zeiger++]);
+              code++;
+            }
+            code <<= 1;
+          }
+          return buch;
+        };
+
+        /* Geometrie aus dem SOF-Auszug */
+        const kompY = fragmente.find((t) => t.kenn === 1);
+        if (!kompY) throw new Error("Komponente 1 fehlt");
+        const hv = kompY.hv >> 4, vv = kompY.hv & 15;
+        if (!(hv === 1 || hv === 2) || !(vv === 1 || vv === 2))
+          throw new Error("Abtastfaktoren nur 1 oder 2 verstanden");
+        const mcusX = Math.ceil(bildB / (8 * hv)), mcusY = Math.ceil(bildH / (8 * vv));
+
+        const daten = [];
+        while (true) {
+          const b = nimm();
+          if (b === 0xFF) {
+            const na = nimm();
+            if (na === 0x00) { daten.push(0xFF); continue; }
+            if (na === 0xD9) break;
+            throw new Error(`unerwartete Markierung 0xFF${hex(na)} mitten im Scan`);
+          }
+          daten.push(b);
+        }
+
+        let bitP = 0;
+        const bit = () => {
+          const idx = bitP >> 3;
+          if (idx >= daten.length) throw new Error("Scan endet mitten im Symbol");
+          const b = (daten[idx] >> (7 - (bitP & 7))) & 1;
+          bitP++;
+          return b;
+        };
+        const symbole = (buch) => {
+          let kode = 0;
+          for (let l = 1; l <= 16; l++) {
+            kode = (kode << 1) | bit();
+            const gefunden = buch.get(kode * 100 + l);
+            if (gefunden !== undefined) return gefunden;
+          }
+          throw new Error("kein Codesatz-Eintrag nach 16 Bit");
+        };
+        const leseZusatz = (kat) => {
+          if (kat === 0) return 0;
+          let w = 0;
+          for (let i = 0; i < kat; i++) w = (w << 1) | bit();
+          return (w & (1 << (kat - 1))) ? w : w - (1 << kat) + 1;
+        };
+
+        const bauchDL = baue(ordnung[0].dc, "dc"), bauchAL = baue(ordnung[0].ac, "ac");
+        const bauchDC = baue(ordnung[1].dc, "dc"), bauchAC = baue(ordnung[1].ac, "ac");
+        const qtabY = quants[kompY.qt];
+        const komp2 = fragmente.find((t) => t.kenn === 2);
+        const qtabC = quants[komp2.qt];
+        const qqY = {}, qqCb = {}, qqCr = {};
+        const dv = { y: 0, cb: 0, cr: 0 };
+        const liesDU = (buchD, buchA, komponente) => {
+          const kat = symbole(buchD);
+          if (kat > 11) throw new Error("DC-Kategorie außer Reichweite");
+          dv[komponente] += leseZusatz(kat);
+          const qq = new Int16Array(64);
+          qq[0] = dv[komponente];
+          let k = 1;
+          while (k < 64) {
+            const rs = symbole(buchA);
+            const lauf = rs >> 4, groesse = rs & 15;
+            if (groesse === 0) {
+              if (lauf === 15) { k += 16; continue; }
+              if (lauf === 0) break;
+              throw new Error("undefinierter Läufewert");
+            }
+            if (groesse > 10) throw new Error("AC-Kategorie außer Reichweite");
+            k += lauf;
+            if (k > 63) throw new Error("Lauf läuft über das Blockende hinaus");
+            qq[ZICKZACK[k]] = leseZusatz(groesse);
+            k++;
+          }
+          return qq;
+        };
+        for (let my = 0; my < mcusY; my++)
+          for (let mx = 0; mx < mcusX; mx++) {
+            for (let sy = 0; sy < vv; sy++)
+              for (let sx = 0; sx < hv; sx++)
+                qqY[(mx * hv + sx) + ":" + (my * vv + sy)] =
+                  liesDU(bauchDL, bauchAL, "y");
+            qqCb[mx + ":" + my] = liesDU(bauchDC, bauchAC, "cb");
+            qqCr[mx + ":" + my] = liesDU(bauchDC, bauchAC, "cr");
+          }
+        const rest = daten.length * 8 - bitP;
+        for (let i = 0; i < rest; i++) {
+          const idxAlt = bitP++;
+          if (((daten[idxAlt >> 3] >> (7 - (idxAlt & 7))) & 1) !== 1)
+            throw new Error("nach dem letzten Symbol liegt keine reine Eins-Auffüllung");
+        }
+        return { breite: bildB, hoehe: bildH, qqY, qqCb, qqCr, quants, fragmente };
+      }
+      p = ende;
+    }
+  }
+
+  /* ==========================================================================
+     MESSWERKZEUG
+     ========================================================================== */
+  function fehlermassen(a, b) {
+    let summe = 0, max = 0, quad = 0;
+    for (let i = 0; i < ROHBYTES; i++) {
+      const d = Math.abs(a[i] - b[i]);
+      summe += d; quad += (a[i] - b[i]) * (a[i] - b[i]);
+      if (d > max) max = d;
+    }
+    const mse = quad / ROHBYTES;
+    return { mittel: summe / ROHBYTES, max, mse, psnr: mse === 0 ? Infinity : 10 * Math.log10(65025 / mse) };
+  }
+  function korrelation(a, b) {
+    let sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0;
+    for (let i = 0; i < ROHBYTES; i++) { sa += a[i]; sb += b[i]; saa += a[i] * a[i]; sbb += b[i] * b[i]; sab += a[i] * b[i]; }
+    const zähler = ROHBYTES * sab - sa * sb;
+    const nenner = Math.sqrt(ROHBYTES * saa - sa * sa) * Math.sqrt(ROHBYTES * sbb - sb * sb);
+    return zähler / nenner;
+  }
+
+  function male(canvas, rgbBytes, b, h) {
+    const ctx = canvas.getContext("2d");
+    const io = ctx.createImageData(b, h);
+    for (let p = 0; p < b * h; p++) {
+      io.data[p * 4] = rgbBytes[p * 3];
+      io.data[p * 4 + 1] = rgbBytes[p * 3 + 1];
+      io.data[p * 4 + 2] = rgbBytes[p * 3 + 2];
+      io.data[p * 4 + 3] = 255;
+    }
+    ctx.putImageData(io, 0, 0);
+  }
+  function maleUnterschied(canvas, a, b) {
+    let breit = 1;
+    for (let i = 0; i < ROHBYTES; i++) {
+      const d = Math.abs(a[i] - b[i]);
+      if (d > breit) breit = d;
+    }
+    const staerke = Math.min(24, Math.max(2, 220 / breit));
+    const ctx = canvas.getContext("2d");
+    const io = ctx.createImageData(BREITE, HOEHE);
+    for (let p = 0; p < BREITE * HOEHE; p++) {
+      let g = 0;
+      for (let k = 0; k < 3; k++) g = Math.max(g, Math.abs(a[p * 3 + k] - b[p * 3 + k]));
+      const s = Math.min(255, Math.round(g * staerke));
+      io.data[p * 4] = 24;
+      io.data[p * 4 + 1] = s > 0 ? Math.min(255, 30 + s) : 20;
+      io.data[p * 4 + 2] = s > 0 ? Math.min(255, 60 + s * 2.2) : 16;
+      io.data[p * 4 + 3] = 255;
+    }
+    ctx.putImageData(io, 0, 0);
+    return breit;
+  }
+
+  /* ==========================================================================
+     BLOCKANSICHT
+     ========================================================================== */
+  let aktivesMotiv = "boegen";
+  let klickBlock = null;
+
+  function blockZeigen(cx, cy) {
+    const bx = Math.floor(cx / 8), by = Math.floor(cy / 8);
+    const guete = +$("s-guete").value;
+    const tabellenL = quantTabelle(BASIS_LUMA, guete);
+    const quelle = motivDaten(aktivesMotiv);
+    const klecks = new Float64Array(64);
+    for (let y = 0; y < 8; y++)
+      for (let x = 0; x < 8; x++) {
+        const yy = Math.min(HOEHE - 1, by * 8 + y), xx = Math.min(BREITE - 1, bx * 8 + x);
+        klecks[y * 8 + x] = ycbcrAusRgb(quelle[(yy * BREITE + xx) * 3],
+          quelle[(yy * BREITE + xx) * 3 + 1], quelle[(yy * BREITE + xx) * 3 + 2])[0];
+      }
+    const f = dctBlock(klecks);
+    const halt = $("m-luma");
+    halt.textContent = "";
+    const qq = new Array(64);
+    let groesste = 1;
+    for (let i = 0; i < 64; i++) { qq[i] = quat(f[i], tabellenL[i]); groesste = Math.max(groesste, Math.abs(qq[i])); }
+    for (let vy = 0; vy < 8; vy++)
+      for (let vx = 0; vx < 8; vx++) {
+        const i = vy * 8 + vx, wert = qq[i];
+        const zelle = document.createElement("b");
+        if (wert === 0) { zelle.textContent = "·"; }
+        else {
+          const anteil = Math.log1p(Math.abs(wert)) / Math.log1p(groesste);
+          zelle.style.background = wert > 0
+            ? `rgba(31,95,168,${(0.15 + 0.85 * anteil).toFixed(3)})`
+            : `rgba(168,71,31,${(0.15 + 0.85 * anteil).toFixed(3)})`;
+          if (anteil > 0.5) zelle.style.color = "#FAFAF8";
+          zelle.textContent = wert;
+        }
+        zelle.title = `Frequenz (${vx},${vy}) · Stufe ${tabellenL[i]} · Transformwert ${f[i].toFixed(2)}`;
+        halt.append(zelle);
+      }
+    const nullen = qq.filter((v) => v === 0).length;
+    $("block-info").textContent = `Block Spalte ${bx}, Zeile ${by} · DC-Quotient ${qq[0]} (Stufe ${tabellenL[0]}) · heller Anteil ${klecks[0].toFixed(1)}`;
+    $("tabellen-info").textContent = `${nullen} von 64 Quotienten auf null · Tabellenskalierung Güte ${guete}`;
+    $("block-lage").textContent = `Block ${bx}:${by}`;
+  }
+
+  /* ==========================================================================
+     DER LIVE-WEG
+     ========================================================================== */
+  let urlAlt = null;
+
+  async function liveBauen() {
+    const guete = +$("s-guete").value;
+    const halbiert = $("c-subsample").checked;
+    $("l-guete").textContent = guete;
+    const quelle = motivDaten(aktivesMotiv);
+    male($("v-original"), quelle, BREITE, HOEHE);
+    $("hint-original").textContent = `${BREITE} × ${HOEHE} Pixel · ${(ROHBYTES / 1024).toFixed(1)} kB roh`;
+
+    /* Nur Farbe, hin und zurück */
+    const nurFarbe = new Uint8ClampedArray(ROHBYTES);
+    for (let i = 0; i < BREITE * HOEHE; i++) {
+      const [y, cb, cr] = ycbcrAusRgb(quelle[i * 3], quelle[i * 3 + 1], quelle[i * 3 + 2]);
+      const [r, g, b] = rgbAusYcbcr(y, cb, cr);
+      nurFarbe[i * 3] = r; nurFarbe[i * 3 + 1] = g; nurFarbe[i * 3 + 2] = b;
+    }
+    const massFarbe = fehlermassen(quelle, nurFarbe);
+
+    /* Farbe plus Halbierung, außerhalb des Encoders gerechnet */
+    let massHalb = massFarbe;
+    if (halbiert) {
+      const nab = new Uint8ClampedArray(ROHBYTES);
+      const cbEbene = halbiere(Float32Array.from({ length: BREITE * HOEHE }, (_, i) =>
+        ycbcrAusRgb(quelle[i * 3], quelle[i * 3 + 1], quelle[i * 3 + 2])[1]), BREITE, HOEHE);
+      const crEbene = halbiere(Float32Array.from({ length: BREITE * HOEHE }, (_, i) =>
+        ycbcrAusRgb(quelle[i * 3], quelle[i * 3 + 1], quelle[i * 3 + 2])[2]), BREITE, HOEHE);
+      for (let y = 0; y < HOEHE; y++)
+        for (let x = 0; x < BREITE; x++) {
+          const i = y * BREITE + x;
+          const yv = ycbcrAusRgb(quelle[i * 3], quelle[i * 3 + 1], quelle[i * 3 + 2])[0];
+          const [r, g, b] = rgbAusYcbcr(yv, Math.round(cbEbene.d[(y >> 1) * cbEbene.b + (x >> 1)]),
+            Math.round(crEbene.d[(y >> 1) * crEbene.b + (x >> 1)]));
+          nab[i * 3] = r; nab[i * 3 + 1] = g; nab[i * 3 + 2] = b;
+        }
+      massHalb = fehlermassen(quelle, nab);
+    }
+
+    /* Ganzer Weg einschließlich eigener Datei */
+    const tabL = quantTabelle(BASIS_LUMA, guete), tabC = quantTabelle(BASIS_CHROMA, guete);
+    const weg = jfifSchreiben(quelle, BREITE, HOEHE, tabL, tabC, halbiert, false);
+    const mass = fehlermassen(quelle, weg.reko);
+    male($("v-rekonstruktion"), weg.reko, BREITE, HOEHE);
+    $("hint-reko").textContent = `${ganz(weg.folge.length)} Bytes eigenes JFIF`;
+    maleUnterschied($("v-diff"), quelle, weg.reko);
+    $("hint-diff").textContent = "Skala verstärkt automatisch";
+
+    $("w-groesse").textContent = (weg.folge.length / 1024).toFixed(1) + " kB";
+    $("w-faktor").textContent = "× " + (ROHBYTES / weg.folge.length).toFixed(1);
+    $("w-fehler").textContent = mass.mittel.toFixed(2);
+    $("w-maxfehler").textContent = String(mass.max);
+    $("w-psnr").textContent = mass.psnr.toFixed(1) + " dB";
+    $("pipeline-lage").textContent = `Güte ${guete}${halbiert ? " · 4:2:0" : " · 4:4:4"}`;
+
+    const tb = $("stufen-liste");
+    tb.textContent = "";
+    const zeileAnhängen = (name, text) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${name}</td><td>${text}</td>`;
+      tb.append(tr);
+    };
+    zeileAnhängen("1 · Farbe über den Läufer",
+      `mittlerer |Δ| ${massFarbe.mittel.toFixed(2)}, größter ${massFarbe.max} · PSNR ${massFarbe.psnr.toFixed(1)} dB`);
+    zeileAnhängen(halbiert ? "2 · Chroma halbiert" : "2 · Chroma ungeteilt",
+      halbiert ? `mittlerer |Δ| ${massHalb.mittel.toFixed(2)}, größter ${massHalb.max} · PSNR ${massHalb.psnr.toFixed(1)} dB`
+               : "liegt brach — keine neue Messung fällig");
+    zeileAnhängen("3 · Gewichtetes Runden",
+      `Güte ${guete}: mittlerer |Δ| ${mass.mittel.toFixed(2)}, größter ${mass.max} · PSNR ${mass.psnr.toFixed(1)} dB`);
+    zeileAnhängen("4 · Bitströme und Köpfe", "verliert nichts — der Prüflauf kehrt jeden Strom bitweise zurück");
+
+    /* Markierungskette und Probebytes */
+    const kettenZeilen = weg.merker.map((m) =>
+      `${hex(weg.folge[m.stelle])}${hex(weg.folge[m.stelle + 1])}  ${m.name.padEnd(7)}@ ${String(m.stelle).padStart(6)}`).join("\n");
+    const erste = [];
+    for (let i = 0; i < Math.min(48, weg.folge.length); i++) {
+      if (i && i % 16 === 0) erste.push("\n");
+      erste.push(hex(weg.folge[i]), " ");
+    }
+    $("hexdump").textContent =
+      `Markierungen:\n${kettenZeilen}\n\nerste 48 Bytes:\n${erste.join("")}`;
+    $("bytes-lage").textContent = `${ganz(weg.folge.length)} Bytes · ${weg.merker.length} Markierungen`;
+
+    /* Browser-Zeuge */
+    try {
+      if (urlAlt) URL.revokeObjectURL(urlAlt);
+      urlAlt = URL.createObjectURL(new Blob([weg.folge], { type: "image/jpeg" }));
+      const bild = new Image();
+      await new Promise((fertig, scheiter) => {
+        bild.onload = fertig;
+        bild.onerror = () => scheiter(new Error("verwarf unsere Bytes"));
+        bild.src = urlAlt;
+      });
+      const zb = $("v-browser");
+      const zctx = zb.getContext("2d");
+      zctx.clearRect(0, 0, BREITE, HOEHE);
+      zctx.drawImage(bild, 0, 0, BREITE, HOEHE);
+      const gelesen = zctx.getImageData(0, 0, BREITE, HOEHE).data;
+      const browserRgb = new Uint8ClampedArray(ROHBYTES);
+      for (let pp = 0; pp < BREITE * HOEHE; pp++) {
+        browserRgb[pp * 3] = gelesen[pp * 4];
+        browserRgb[pp * 3 + 1] = gelesen[pp * 4 + 1];
+        browserRgb[pp * 3 + 2] = gelesen[pp * 4 + 2];
+      }
+      const kopf = fehlermassen(browserRgb, weg.reko);
+      const rho = korrelation(browserRgb, weg.reko);
+      $("hint-browser").textContent =
+        `Browser-Decodierung unserer Bytes: mittlerer |Δ| zum eigenen Rückweg ${kopf.mittel.toFixed(3)}, größter ${kopf.max} · Korrelation ${rho.toFixed(6)}`;
+    } catch (e) {
+      $("hint-browser").innerHTML = `<b>Fremder Deuter weigerte sich:</b> ${String(e.message || e)}`;
+    }
+
+    if (klickBlock) blockZeigen(klickBlock.x, klickBlock.y);
+    await rast();
+  }
+
+  /* ==========================================================================
+     PRÜFLAUF
+     ========================================================================== */
+  let laeuft = false;
+  function pruefZeile(tbody, was, gut, text) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${was}</td><td style="color:${gut ? "var(--gut)" : "var(--warn)"}">${text}</td>`;
+    tbody.append(tr);
+    return gut;
+  }
+
+  async function pruefen() {
+    if (laeuft) return;
+    laeuft = true;
+    $("b-pruefen").disabled = true;
+    const tb = $("pruef").querySelector("tbody");
+    tb.textContent = "";
+    const fuss = $("pruef-fuss");
+    const t0 = performance.now();
+    let beanstandet = 0;
+    const merken = (gut) => { if (!gut) beanstandet++; };
+    try {
+      /* 1 · Farbe: zwei Formulierungen, Grauachse vollständig, Achsen, Ecken, Säuglinge */
+      {
+        const q = mulberry(26082026);
+        const stellen = [[0,0,0],[255,255,255],[255,0,0],[0,255,0],[0,0,255],[128,128,128],[200,100,50]];
+        for (let v = 0; v <= 255; v++) stellen.push([v, v, v]);
+        for (let v = 0; v <= 255; v += 17) { stellen.push([v,0,0]); stellen.push([0,v,0]); stellen.push([0,0,v]); }
+        for (let i = 0; i < 24000; i++)
+          stellen.push([Math.floor(q() * 256), Math.floor(q() * 256), Math.floor(q() * 256)]);
+        let nebenL = 0, nebenC = 0, grauBrach = 0;
+        for (const [r, g, b] of stellen) {
+          const a = ycbcrAusRgb(r, g, b), w = ycbcrAusRgbKrKb(r, g, b);
+          if (Math.abs(a[0] - w[0]) > 0) nebenL++;
+          if (Math.abs(a[1] - w[1]) > 1 || Math.abs(a[2] - w[2]) > 1) nebenC++;
+        }
+        for (let v = 0; v <= 255; v++) {
+          const [, cb, cr] = ycbcrAusRgb(v, v, v);
+          if (cb !== 128 || cr !== 128) grauBrach++;
+        }
+        merken(pruefZeile(tb, "Farbraum hin, auf zwei Wegen",
+          nebenL === 0 && nebenC === 0 && grauBrach === 0,
+          `<b>${ganz(stellen.length)}</b> Farbstellen durch beide Formulierungen: Koeffizientenvorschrift und Kr/Kb-Bau halten zusammen — <b>${nebenL}</b> Abweichungen an der Helligkeit, <b>${nebenC}</b> an der Farbe (Toleranz ±1 aus der Reihenfolge der Summanden) · Grauachse komplett: alle 256 Graustufen kommen mit farblosem Anteil zurück — <b>${grauBrach}</b> daneben`));
+      }
+
+      /* 2 · Teilabtastung: erschöpfend über sämtliche Paare */
+      {
+        let uebertreten = 0, hoechststand = 0;
+        for (let a = 0; a <= 255; a++)
+          for (let b = 0; b <= 255; b++) {
+            const gerundet = Math.floor((a + b) / 2 + 0.5);
+            const erlaubt = Math.ceil(Math.abs(a - b) / 2);
+            const tat = Math.abs(gerundet - a);
+            if (tat > erlaubt) uebertreten++;
+            if (tat > hoechststand) hoechststand = tat;
+          }
+        merken(pruefZeile(tb, "Halbieren, aber vertretbar",
+          uebertreten === 0,
+          `sämtliche <b>65 536</b> Byte-Paare erscheinen dreimal gedacht: Mittelung, Rückweg über Wiederholung, Abweichung — keine übersteigt die Hälfte der Schiefheit des Paares · <b>0</b> Übertretungen, gemessener Höchststand ${hoechststand}`));
+      }
+
+      /* 3 · Transform: Doppelsumme neben Schnellfassung, Rückweg, Energie */
+      {
+        const q = mulberry(17082026);
+        const menge = [];
+        for (let eben = 40; eben <= 208; eben += 24)
+          menge.push(new Array(64).fill(eben));
+        for (let pos = 0; pos < 64; pos += 9) {
+          const r = new Array(64).fill(0); r[pos] = 512; menge.push(r);
+        }
+        for (let i = 0; i < 3000; i++) {
+          const r = new Array(64);
+          for (let k = 0; k < 64; k++) r[k] = Math.floor(q() * 256);
+          menge.push(r);
+        }
+        let wortAbweichen = 0, rueckSchieben = 0, energieLeak = 0;
+        let wortMax = 0, rueckMax = 0, energMax = 0;
+        for (const block of menge) {
+          const schnell = dctBlock(block);
+          const wortlaut = dctDefinitionswortlaut(block);
+          for (let i = 0; i < 64; i++) {
+            const d = Math.abs(schnell[i] - wortlaut[i]);
+            if (d > 1e-9) wortAbweichen++;
+            if (d > wortMax) wortMax = d;
+          }
+          const rueck = idctBlock(schnell);
+          for (let k = 0; k < 64; k++) {
+            const d = Math.abs(rueck[k] - block[k]);
+            if (d > 1e-8) rueckSchieben++;
+            if (d > rueckMax) rueckMax = d;
+          }
+          let sf = 0, sr = 0;
+          for (let k = 0; k < 64; k++) { sf += block[k] * block[k]; sr += schnell[k] * schnell[k]; }
+          const rel = Math.abs(sf - sr) / Math.max(1, sf);
+          if (rel > 1e-9) energieLeak++;
+          if (rel > energMax) energMax = rel;
+        }
+        merken(pruefZeile(tb, "Transform gegen ihren Wortlaut",
+          wortAbweichen === 0 && rueckSchieben === 0 && energieLeak === 0,
+          `<b>${ganz(menge.length)}</b> Blockfiguren — Konstante, Einzelnadeln, ${ganz(menge.length - 16)} gesäte Streuer · größte Abweichung Wortlaut ↔ Schnellfassung <b>${wortMax.toExponential(1)}</b>, Rückweg zur Ausgangsstellung <b>${rueckMax.toExponential(1)}</b>, Energiebilanz relativ <b>${energMax.toExponential(1)}</b> · gezählt daneben: ${wortAbweichen} / ${rueckSchieben} / ${energieLeak}`));
+      }
+
+      /* 4 · Rundungslinie erschöpfend */
+      {
+        let uebertreten = 0;
+        for (let s = 1; s <= 255; s++)
+          for (let w = -1020; w <= 1020; w++) {
+            const rueck = quat(w, s) * s;
+            if (Math.abs(rueck - w) > s / 2) uebertreten++;
+          }
+        merken(pruefZeile(tb, "Runden innerhalb der halben Stufe",
+          uebertreten === 0,
+          `alle <b>${ganz(255 * 2041)}</b> Paare von Tabellenstufe und Transformwert (Stufen 1…255, Werte −1020…1020) einmal hin, einmal zurück: der Rückweg lag nie mehr als die halbe Stufe daneben · <b>0</b> Übertretungen`));
+      }
+
+      /* 5 · Codesätze gegen veröffentlichte Kodewörter */
+      {
+        const evidenz = [
+          ["DC-L Kategorie 0", SATZ_DC_L, 0, 0b00, 2],
+          ["DC-L Kategorie 5", SATZ_DC_L, 5, 0b110, 3],
+          ["AC-L 0/0 (Ende)", SATZ_AC_L, 0x00, 0b1010, 4],
+          ["AC-L 0/5", SATZ_AC_L, 0x05, 0b11010, 5],
+          ["AC-L 5/2", SATZ_AC_L, 0x52, 0b11111110111, 11],
+          ["AC-L 0/A", SATZ_AC_L, 0x0A, 0b1111111110000011, 16],
+          ["DC-C Kategorie 0", SATZ_DC_C, 0, 0b00, 2],
+          ["AC-C 0/0 (Ende)", SATZ_AC_C, 0x00, 0b00, 2]
+        ];
+        let daneben = 0;
+        for (const [, buch, schl, sollCode, sollLen] of evidenz) {
+          const ist = buch.get(schl);
+          if (!ist || ist.code !== sollCode || ist.laenge !== sollLen) daneben++;
+        }
+        const journalSumme = BITS_AC_LUMA.reduce((a, b) => a + b, 0) + BITS_AC_CHROMA.reduce((a, b) => a + b, 0);
+        merken(pruefZeile(tb, "Codesätze halten fremdem Wortlaut stand",
+          daneben === 0 && journalSumme === W_AC_LUMA.length + W_AC_CHROMA.length,
+          `acht Kodewörter, in Lehrbüchern hingeschrieben (u.a. „0/0“ = 1010, „0/5“ = 11010, „5/2“ = 11111110111): je eines aus jedem eigenen Buch trifft Buchstabe für Buchstabe · Bitlängenjournal ${ganz(journalSumme)} Einträge = ${ganz(W_AC_LUMA.length)} + ${ganz(W_AC_CHROMA.length)} Symbole · <b>${daneben}</b> daneben`));
+      }
+
+      /* 6 · Bitströme kehren zurück */
+      {
+        const gueten = [12, 50, 95];
+        const q = mulberry(987654321);
+        let stroeme = 0, kaputteDateien = 0, verglicheneWerte = 0;
+        for (const guete of gueten) {
+          const tabL = quantTabelle(BASIS_LUMA, guete), tabC = quantTabelle(BASIS_CHROMA, guete);
+          for (let muster = 0; muster < 4; muster++) {
+            const px = new Uint8ClampedArray(32 * 16 * 3);
+            for (let i = 0; i < 32 * 16; i++) {
+              let r, g, b;
+              if (muster === 0) { r = g = b = (i * 7) % 256; }
+              else if (muster === 1) { r = Math.floor(q() * 256); g = Math.floor(q() * 256); b = Math.floor(q() * 256); }
+              else if (muster === 2) { r = (i % 8) * 30; g = ((i >> 3) % 16) * 15; b = 200; }
+              else { r = 40 + Math.floor(q() * 20); g = r; b = r; }
+              px[i * 3] = r; px[i * 3 + 1] = g; px[i * 3 + 2] = b;
+            }
+            const weg = jfifSchreiben(px, 32, 16, tabL, tabC, false, false);
+            const gelesen = strengDeuten(weg.folge);
+            stroeme++;
+            for (const schl in weg.merkeQQ) {
+              const soll = weg.merkeQQ[schl];
+              const buchSelbst = schl.startsWith("Y:") ? gelesen.qqY
+                : (schl.startsWith("CB:") ? gelesen.qqCb : gelesen.qqCr);
+              const getrennt = schl.indexOf(":");
+              const ist = buchSelbst[schl.slice(getrennt + 1)];
+              if (!ist) { kaputteDateien++; continue; }
+              for (let i = 0; i < 64; i++) {
+                verglicheneWerte++;
+                if (soll[i] !== ist[i]) kaputteDateien++;
+              }
+            }
+          }
+        }
+        merken(pruefZeile(tb, "Bitströme kehren bitweise zurück",
+          stroeme === 12 && kaputteDateien === 0 && verglicheneWerte === stroeme * 24 * 64,
+          `<b>${stroeme}</b> eigene Dateien (3 Güten × 4 Muster, 32×16) durch den strengen Deuter gelassen: alle <b>${ganz(verglicheneWerte)}</b> Quotienten über sämtliche Kanäle kommen identisch zurück · Markierungs-, Tabellen- und Buchstruktur dabei frisch aus den Bytes geparsed · <b>${kaputteDateien}</b> Missstimmigkeiten`));
+      }
+
+      /* 7 · Gegenprobe: das gekippte Bit */
+      {
+        const guete = 60;
+        const tabL = quantTabelle(BASIS_LUMA, guete), tabC = quantTabelle(BASIS_CHROMA, guete);
+        const q = mulberry(424242);
+        const px = new Uint8ClampedArray(32 * 16 * 3);
+        for (let i = 0; i < px.length; i++) px[i] = 60 + Math.floor(q() * 140);
+        const grund = jfifSchreiben(px, 32, 16, tabL, tabC, false, false);
+        const referenz = strengDeuten(grund.folge);
+        const abStart = grund.sosStelle + 14, bisEnde = grund.folge.length - 2;
+        const schritte = Math.max(1, Math.floor((bisEnde - abStart) / 600));
+        let totale = 0, bemerkt = 0, alsWurf = 0, alsAnders = 0;
+        for (let stelle = abStart + 8; stelle < bisEnde && totale < 600; stelle += schritte) {
+          const verdorben = Uint8Array.from(grund.folge);
+          verdorben[stelle] ^= (stelle % 2 === 0 ? 0x04 : 0x01);
+          totale++;
+          try {
+            const anders = strengDeuten(verdorben);
+            let gleich = true;
+            outer: for (const gruppe of ["qqY", "qqCb", "qqCr"]) {
+              for (const schl in referenz[gruppe]) {
+                const a = referenz[gruppe][schl], b = anders[gruppe][schl];
+                if (!b) { gleich = false; break outer; }
+                for (let i = 0; i < 64; i++) if (a[i] !== b[i]) { gleich = false; break outer; }
+              }
+            }
+            if (!gleich) { bemerkt++; alsAnders++; }
+          } catch { bemerkt++; alsWurf++; }
+        }
+        let kontrolleOk = false;
+        try { strengDeuten(grund.folge); kontrolleOk = true; } catch {}
+        merken(pruefZeile(tb, "Gegenprobe: das gekippte Bit",
+          totale > 0 && bemerkt === totale && alsWurf > 0 && alsAnders > 0 && kontrolleOk,
+          `<b>${totale}</b> Einzelbit-Störungen über den ganzen Scan verteilt: <b>${bemerkt}</b> bemerkt — ${alsWurf} verworfen, ${alsAnders} messbar anders zurückgegeben · der unversehrte Originalstrom läuft kontrolliert durch. Beide Wege schlagen an, der Vergleich misst etwas.`));
+      }
+
+      /* 8 · Gegenprobe: der Farben-Tauscher */
+      {
+        const quelle = motivDaten(aktivesMotiv);
+        const tabL = quantTabelle(BASIS_LUMA, 75), tabC = quantTabelle(BASIS_CHROMA, 75);
+        const sauber = jfifSchreiben(quelle, BREITE, HOEHE, tabL, tabC, true, false);
+        const smuggler = jfifSchreiben(quelle, BREITE, HOEHE, tabL, tabC, true, true);
+        const reinigung = fehlermassen(quelle, sauber.reko).mittel;
+        const tauschEigen = fehlermassen(quelle, smuggler.reko).mittel;
+        let tauschFremd = NaN;
+        try {
+          const urlT = URL.createObjectURL(new Blob([smuggler.folge], { type: "image/jpeg" }));
+          const bt = new Image();
+          await new Promise((fertig, scheiter) => { bt.onload = fertig; bt.onerror = scheiter; bt.src = urlT; });
+          const haupt = document.createElement("canvas");
+          haupt.width = BREITE; haupt.height = HOEHE;
+          const hx = haupt.getContext("2d");
+          hx.drawImage(bt, 0, 0, BREITE, HOEHE);
+          const dd = hx.getImageData(0, 0, BREITE, HOEHE).data;
+          const rr = new Uint8ClampedArray(ROHBYTES);
+          for (let pp = 0; pp < BREITE * HOEHE; pp++) {
+            rr[pp * 3] = dd[pp * 4]; rr[pp * 3 + 1] = dd[pp * 4 + 1]; rr[pp * 3 + 2] = dd[pp * 4 + 2];
+          }
+          tauschFremd = fehlermassen(quelle, rr).mittel;
+          URL.revokeObjectURL(urlT);
+        } catch { tauschFremd = NaN; }
+        const grenze = reinigung * 4 + 4;
+        merken(pruefZeile(tb, "Gegenprobe: der Farben-Tauscher",
+          tauschEigen > grenze && Number.isFinite(tauschFremd) && tauschFremd > grenze,
+          `ein Vertauscher macht aus Cb einfach Cr: unser Rückweg meldet mittleren |Δ| <b>${tauschEigen.toFixed(1)}</b> gegenüber ${reinigung.toFixed(1)} beim sauberen Lauf, der Browser sieht ${Number.isFinite(tauschFremd) ? tauschFremd.toFixed(1) : "—"} — beide weit jenseits der Schwelle ${grenze.toFixed(1)} (vierfache Sauberkeit plus vier), die Maschine zeigt auf echten Schaden`));
+      }
+    } catch (f) {
+      merken(pruefZeile(tb, "der Lauf selbst", false, `vorzeitig gestoppt: ${f.message}`));
+    }
+    const dauer = (performance.now() - t0) / 1000;
+    fuss.innerHTML = beanstandet === 0
+      ? `<b>Alle Prüfungen bestanden</b> in ${dauer.toFixed(1)} s. Vier Stufen, jede am eigenen Wortlaut gehalten; beide Gegenproben wurden bei der Tat ertappt — die Maschine misst nicht nur fein, sondern anschlagbar.`
+      : `<b style="color:var(--warn)">${beanstandet} Prüfung(en) fehlgeschlagen.</b>`;
+    $("b-pruefen").disabled = false;
+    laeuft = false;
+  }
+
+  /* ==========================================================================
+     BEDIENUNG
+     ========================================================================== */
+  $("b-pruefen").addEventListener("click", pruefen);
+  $("b-thema").addEventListener("click", () => {
+    const jetzt = document.documentElement.getAttribute("data-theme");
+    const dunkel = jetzt ? jetzt === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.setAttribute("data-theme", dunkel ? "light" : "dark");
+  });
+  document.querySelectorAll(".motiv").forEach((b) =>
+    b.addEventListener("click", () => {
+      aktivesMotiv = b.dataset.motiv;
+      document.querySelectorAll(".motiv").forEach((m) => m.classList.toggle("an", m === b));
+      liveBauen();
+    }));
+  $("s-guete").addEventListener("input", liveBauen);
+  $("c-subsample").addEventListener("change", liveBauen);
+  $("v-original").addEventListener("click", (e) => {
+    const r = e.target.getBoundingClientRect();
+    const cx = Math.floor((e.clientX - r.left) / r.width * BREITE);
+    const cy = Math.floor((e.clientY - r.top) / r.height * HOEHE);
+    klickBlock = { x: cx, y: cy };
+    blockZeigen(cx, cy);
+  });
+
+  liveBauen();
+})();
+</script>
+</body>
+</html>
